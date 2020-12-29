@@ -472,6 +472,27 @@ class Neo4jDataAccess:
         dfs = pd.concat(lst).drop_duplicates(subset=["id"])
         return dfs
 
+    def enrich_user_tl_and_info(self,username, job_name,job_id, limit, include_profile_fetch=False):
+        if include_profile_fetch:
+            tic = time.perf_counter()
+            chk = TwintPool().twint_df_to_neo4j_df(TwintPool()._get_user_timeline(username=username, limit=limit))
+            usr_df = self.__tweetdf_to_neo_account_df(TwintPool()._get_user_info(username=username), job_name=job_name)
+            chk['tmp'] = 1
+            usr_df['tmp'] = 1
+            df = pd.merge(chk, usr_df, on=['tmp'])
+            df = df.drop('tmp', axis=1)
+            res = {"params": df}
+            toc = time.perf_counter()
+            logger.info(f'finished account and data enrichments in:  {toc - tic:0.4f} seconds writing to neo4j now..')
+            self.write_twint_enriched_tweetdf_to_neo(res, job_name, job_id)
+        else:
+            tic = time.perf_counter()
+            chk = TwintPool().twint_df_to_neo4j_df(TwintPool()._get_user_timeline(username=username, limit=limit))
+            res = {"params": chk}
+            toc = time.perf_counter()
+            logger.info(f'finished account and data enrichments in:  {toc - tic:0.4f} seconds writing to neo4j now..')
+            self.write_twint_enriched_tweetdf_to_neo(res, job_name, job_id)
+
     def save_twintdf_to_neo(self, df, job_name, job_id=None):
         if (df is None) or (len(df) == 0):
             logger.info('Empty df for neo conversion, skip')
@@ -520,8 +541,6 @@ class Neo4jDataAccess:
                                                  'user_followers_count'] if 'user_followers_count' in row else None,
                                              'user_friends_count': row[
                                                  'user_friends_count'] if 'user_friends_count' in row else None,
-                                             'user_created_at': pd.to_datetime(
-                                                 df['user_created_at']) if 'user_created_at' in row else None,
                                              'user_profile_image_url': row[
                                                  'user_profile_image_url'] if 'user_profile_image_url' in row else None,
                                              'reply_tweet_id': row[
@@ -668,8 +687,11 @@ class Neo4jDataAccess:
         acctdf['screen_name'] = df['username']
         acctdf['friends_count'] = df["following"]
         acctdf['followers_count'] = df["followers"]
+        #acctdf['user_created_at'].apply(lambda n: str(pd.to_datetime(n)))
+        acctdf['user_created_at'].apply(lambda n: pd.Timestamp(n, unit='s').to_pydatetime())
         acctdf['job_name'] = str(job_name)
         return acctdf
+
 
     def write_twint_enriched_tweetdf_to_neo(self, res, job_name, job_id):
         graph = self.__get_neo4j_graph('writer')
